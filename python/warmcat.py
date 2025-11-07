@@ -4,9 +4,15 @@ import subprocess
 import signal
 import time
 
+kTestMode=False
+
 def start_shell_subprocess():
-    # Start the shell subprocess
-    shell_process = subprocess.Popen(['glxgears'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if ( not kTestMode):
+        # Start the virtual framebuffer first
+        subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24', '-ac', '-nolisten', 'tcp'])
+
+    # Start the actual load, use glxgears on display 99
+    shell_process = subprocess.Popen(['glxgears', '-display', ':99'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     # Suspend and unsuspend the shell process every second
     while True:
