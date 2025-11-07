@@ -2,9 +2,10 @@
 import sys
 import os
 import datetime
+import subprocess
 import rrdtool
 
-sensors_example_output="""
+sensors_example_output_old="""
 dell_smm-isa-0000
 Adapter: ISA adapter
 Processor Fan: 2522 RPM  (min =    0 RPM, max = 4000 RPM)
@@ -30,8 +31,44 @@ temp1:        +63.0°C  (high = +95.0°C, hyst =  +3.0°C)
                        (crit = +105.0°C, hyst =  +5.0°C)
                        (emerg = +125.0°C, hyst =  +5.0°C)
 """
+sensors_example_output="""
+dell_smm-isa-0000
+Adapter: ISA adapter
+Processor Fan:    0 RPM  (min =    0 RPM, max = 4900 RPM)
+CPU:            +26.0°C  
+SODIMM:         +32.0°C  
+Other:          +33.0°C  
 
-k_sensor_list=[
+acpitz-acpi-0
+Adapter: ACPI interface
+temp1:        +26.5°C  (crit = +107.0°C)
+
+coretemp-isa-0000
+Adapter: ISA adapter
+Core 0:       +25.0°C  (high = +105.0°C, crit = +105.0°C)
+Core 1:       +29.0°C  (high = +105.0°C, crit = +105.0°C)
+
+BAT0-acpi-0
+Adapter: ACPI interface
+in0:          11.62 V  
+curr1:         1.01 A  
+"""
+
+sensors_example_output_test="""
+amdgpu-pci-2d00
+Adapter: PCI adapter
+vddgfx:      875.00 mV 
+fan1:         361 RPM  (min =    0 RPM, max = 3300 RPM)
+edge:         +51.0°C  (crit = +94.0°C, hyst = -273.1°C)
+PPT:          13.10 W  (cap = 110.00 W)
+
+k10temp-pci-00c3
+Adapter: PCI adapter
+Tctl:         +67.4°C  
+Tccd1:        +50.2°C  
+"""
+
+k_sensor_list_old=[
     ['CPU'   ,  0           ],
     ['SODIMM',  0,'_1'      ],
     ['Other' ,  0           ],
@@ -43,6 +80,24 @@ k_sensor_list=[
     ['temp1' , 95,' (GPU)'  ],
 ]
 
+k_sensor_list_warmcat=[
+    ['CPU'   ,  0           ],
+    ['SODIMM',  0           ],
+    ['Other' ,  0           ],
+    ['temp1' ,100           ],
+    ['Core 0',100,' (CPU)'  ],
+    ['Core 1',100,' (CPU)'  ]
+]
+
+
+k_sensor_list_test=[
+    ['edge'  ,  90           ],
+    ['Tctl'  ,  90           ],
+    ['Tccd1' ,  90           ]
+]
+
+k_sensor_list = k_sensor_list_test
+
 import rrdtool
 
 import rrdtool
@@ -50,15 +105,19 @@ import datetime
 import os
 
 class SensorRRD:
-    def __init__(self, rrd_dir, sensor_list, fill_missing=True):
+    def __init__(self, rrd_dir, sensor_list, fill_missing=False):
         self.rrd_dir = rrd_dir
         self.sensor_list = sensor_list
         self.timestamp_log = []
         self.last_event_timestamp_file = os.path.join(self.rrd_dir, 'last_event_timestamp.txt')
         self.rrd_file = os.path.join(self.rrd_dir, 'warmcat.rrd')
 
+        # Create the RRD directory if it doesn't exist
+        if not os.path.exists(self.rrd_dir):
+            os.makedirs(self.rrd_dir)
+
         # Check if the RRD file already exists
-        if not rrdtool.info(self.rrd_file):
+        if not os.path.isfile(self.rrd_file):
             # Create the RRD file if it doesn't exist
             self.create_rrd()
 
@@ -155,8 +214,6 @@ class SensorRRD:
         # Print the number of missing entries
         print(f"Missing entries: {missing_entries}")
 
-
-
 class SensorsData:
     def __init__(self, data):
         self.data = data
@@ -187,6 +244,7 @@ class SensorsData:
             self.parsed_data.append(Sensor(sensor))
 
     def parse_data(self, data):
+        #print(data)
         idx=0
         for line in data.split('\n'):
             if line.strip():
@@ -201,6 +259,7 @@ class SensorsData:
                         break
         if (idx < len(self.parsed_data)):
             print(f"ERROR: {idx} sensors parsed out of {len(self.parsed_data)} expected")
+            return None
         return self.parsed_data
 
     def __str__(self):
@@ -209,10 +268,51 @@ class SensorsData:
             s += str(sensor) + "\n"
         return s
 
-def main():
+def load_archive():
+    rrd_dir = 'rrd_dir'
+    sensor_rrd = SensorRRD(rrd_dir, k_sensor_list)
+    sensor_file = 'sensors.txt'
     sensors_data = SensorsData(k_sensor_list)
-    sensors_data.parse_data(sensors_example_output)
+    with open(sensor_file, 'r') as file:
+        while True:
+            data = ''
+            for i in range(25):
+                line = file.readline()
+                if (not line) or (line == ''):
+                    break
+                data += line
+            if (not sensors_data.parse_data(data)):
+                break
+            print(sensors_data)
+
+def do_it():
+    rrd_dir = 'rrd_dir'
+    sensor_rrd = SensorRRD(rrd_dir, k_sensor_list)
+    # run 'sensors' command and parse the output
+    sensors_data = SensorsData(k_sensor_list)
+    sensors_data.parse_data(subprocess.check_output(['sensors']).decode('utf-8'))
     print(sensors_data)
 
-if __name__ == "__main__":
+def main():
+    do_it()
+    #load_archive()
+    # Create an instance of the SensorRRD class
+    #rrd_dir = 'rrd_dir'
+    
+    #sensor_list = ['sensor1', 'sensor2', 'sensor3']
+    #sensor_rrd = SensorRRD(rrd_dir, sensor_list)
+    #sensors_data = SensorsData(k_sensor_list)
+    # Read the sensor file in chunks of 25 lines
+            #sensor_rrd.update_rrd(sensors_data.get_sensor_data())
+
+            # Sleep for 10 seconds before reading the next chunk
+            #time.sleep(10)
+
+    # Print the number of missing entries filled
+    #sensor_rrd.fill_missing_entries()
+
+    # Retrieve and print the data from the RRD file
+    #sensor_rrd.get_graph()
+
+if __name__ == '__main__':
     main()
