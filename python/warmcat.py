@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Create a file handler
-file_handler = logging.FileHandler('log_file.log')
+if not kTestMode:
+    file_handler = logging.FileHandler('/home/warmcat/var/log/log_file.log')
+else:
+    file_handler = logging.StreamHandler(sys.stdout)
 file_handler.setLevel(logging.INFO)
 
 # Create a formatter and add it to the file handler
@@ -138,7 +141,7 @@ class SensorsData:
         return s
 
 class CatLoad:
-    def __init__(self, window_size=2, repeats=5):
+    def __init__(self, window_size=1, repeats=5):
         self.window_size = window_size
         self.repeats = repeats
         # Start the virtual framebuffer first
@@ -163,6 +166,13 @@ class CatLoad:
             time.sleep(slptime)
         self.shell_process.send_signal(signal.SIGCONT)
 
+def compute_ratio(target,maxval,ratio):
+    if (maxval > 90):
+        return max(0, ratio/2.)
+    if (maxval < target):
+        return min(1, ratio*(1+abs(maxval/target)/10))
+    return max(0, ratio*(1-abs(target/maxval)/10))
+
 def main_loop():
     sensors_data = SensorsData(k_sensor_list)
     cat_load = CatLoad()
@@ -171,13 +181,13 @@ def main_loop():
     ratio=0.5
     while True:
         sensors_data.parse_data(subprocess.check_output(['sensors']).decode('utf-8'))
-        max = sensors_data.process_sensors()
-        print(sensors_data)
-        print(f"Maximum temperature: {max}°C")
-        if (max < 60):
-            ratio = 1
-        else:
-            ratio = 0
+        maxval = sensors_data.process_sensors()
+        #print(sensors_data)
+        print(f"Maximum temperature: {maxval}°C")
+        logger.info(f"Maximum temperature: {maxval}°C")
+        ratio = compute_ratio(75,maxval,ratio)
+        print(f"Load ratio: {ratio}")
+        logger.info(f"Load ratio: {ratio}")
         cat_load.do_load(ratio)
 
 def main():
