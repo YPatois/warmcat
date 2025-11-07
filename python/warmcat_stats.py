@@ -237,7 +237,6 @@ class Sensor:
         return f"{self.xname}: {self.current}°C"
 
 class SensorsData:
-
     def __init__(self, sensor_list):
         self.parsed_data = []
         for sensor in sensor_list:
