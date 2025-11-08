@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import subprocess
 import signal
@@ -57,14 +58,15 @@ curr1:         1.09 A
 """
 
 k_sensor_list_warmcat=[
-    ['Core 0',100,' (CPU)'  ],
-    ['Core 1',100,' (CPU)'  ],
-    ['temp1' ,100           ],
-    ['CPU'   ,  0           ],
-    ['SODIMM',  0           ],
-    ['Other' ,  0           ],
-    ['GPU'   ,  0           ],
-    ['temp1' , 95,' (GPU)'  ]
+    [1,'Core 0'        ,100,' (CPU)'  ],
+    [1,'Core 1'        ,100,' (CPU)'  ],
+    [1,'temp1'         ,100           ],
+    [0,'Processor Fan' ,  0           ],
+    [1,'CPU'           ,  0           ],
+    [1,'SODIMM'        ,  0           ],
+    [1,'Other'         ,  0           ],
+    [1,'GPU'           ,  0           ],
+    [1,'temp1'         , 95,' (GPU)'  ]
 ]
 
 k_sensor_list_test=[
@@ -81,10 +83,11 @@ else:
 
 class Sensor:
     def __init__(self, s):
-        self.name = s[0]
-        self.max = s[1]
-        if (len(s) > 2):
-            self.xname = self.name + s[2]
+        self.is_temperature = True if (s[0] == 1) else False
+        self.name = s[1]
+        self.max = s[2]
+        if (len(s) > 3):
+            self.xname = self.name + s[3]
         else:
             self.xname = self.name
         self.current = -1
@@ -107,7 +110,11 @@ class SensorsData:
                 sensor_name = parts[0].strip()
                 if (sensor_name == self.parsed_data[idx].name):
                     #print(f"Found {sensor_name}")
-                    value = parts[1].strip().split('°')[0]
+                    if (self.parsed_data[idx].is_temperature):
+                        value = parts[1].strip().split('°')[0]
+                    else:
+                        #print (parts[1])
+                        value = parts[1].strip().split(' ')[0].strip()
                     self.parsed_data[idx].current = float(value)
                     idx += 1
                     if (idx >= len(self.parsed_data)):
@@ -122,11 +129,16 @@ class SensorsData:
         max=-1
         # Iterate over all sensors
         for sensor in self.parsed_data:
+            if not sensor.is_temperature:
+                self.fan_speed=sensor.current
+                continue
             # Check if the current temperature is greater than the maximum temperature
             if (sensor.max > 0) and (sensor.current > sensor.max):
                 # If so, print a warning message
-                print(f"WARNING: {sensor.name} temperature is {sensor.current}°C, which is greater than the maximum temperature of {sensor.max}°C")
-                logger.warning(f"WARNING: {sensor.name} temperature is {sensor.current}°C, which is greater than the maximum temperature of {sensor.max}°C")
+                #print(f"WARNING: {sensor.name} temperature is {sensor.current}°C, which is greater than the maximum temperature of {sensor.max}°C")
+                logger.error(f"{sensor.name} temperature is {sensor.current}°C, which is greater than the maximum temperature of {sensor.max}°C")
+                os.kill(os.getpid(), signal.SIGINT)
+                time.sleep(1)
                 sys.exit(1)
             # Check if the current temperature is greater than the maximum temperature
             if (sensor.current > max):
@@ -146,7 +158,7 @@ class CatLoad:
         self.repeats = repeats
         # Start the virtual framebuffer first
         if ( not kTestMode):
-            subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24', '-ac', '-nolisten', 'tcp'])
+            self.vfb_process = subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24', '-ac', '-nolisten', 'tcp'])
             self.shell_process = subprocess.Popen(['glxgears', '-display', ':99'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         else:
             self.shell_process = subprocess.Popen(['glxgears'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -164,7 +176,6 @@ class CatLoad:
             time.sleep(runtime)
             self.shell_process.send_signal(signal.SIGTSTP)
             time.sleep(slptime)
-        self.shell_process.send_signal(signal.SIGCONT)
 
 def compute_ratio(target,maxval,ratio):
     if (maxval > 90):
@@ -179,16 +190,22 @@ def main_loop():
 
     # Suspend and unsuspend the shell process every second
     ratio=0.5
+    cnt=0
     while True:
         sensors_data.parse_data(subprocess.check_output(['sensors']).decode('utf-8'))
         maxval = sensors_data.process_sensors()
         #print(sensors_data)
-        print(f"Maximum temperature: {maxval}°C")
-        logger.info(f"Maximum temperature: {maxval}°C")
+        #print(f"Maximum temperature: {maxval}°C")
         ratio = compute_ratio(75,maxval,ratio)
-        print(f"Load ratio: {ratio}")
-        logger.info(f"Load ratio: {ratio}")
+        #print(f"Load ratio: {ratio}")
+        logger.info(f"Tmax: {maxval}°C - Ratio: {ratio:.3f} - Fan: {sensors_data.fan_speed:.0f} RPM")
         cat_load.do_load(ratio)
+        cnt += 1
+        # An equilibrium can be found at any fan speed (hiher ratio and higher fan speed)
+        # To limit divergence, once in a while, we pause, thus slowing fan.
+        if cnt > 100:
+            time.sleep(100)
+            cnt = 0
 
 def main():
     main_loop()
