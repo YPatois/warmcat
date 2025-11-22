@@ -70,15 +70,16 @@ k_sensor_list_warmcat=[
 ]
 
 k_sensor_list_test=[
-    ['edge'  ,  90           ],
-    ['Tctl'  ,  90           ],
-    ['Tccd1' ,  90           ]
+    [1,'edge'  ,  90           ],
+    [1,'Tctl'  ,  90           ],
+    [1,'Tccd1' ,  90           ]
 ]
 
 if (kTestMode):
     logger.info("Running in test mode")
     k_sensor_list=k_sensor_list_test
 else:
+    logger.info("Running in normal mode")
     k_sensor_list=k_sensor_list_warmcat
 
 class Sensor:
@@ -144,6 +145,8 @@ class SensorsData:
             if (sensor.current > max):
                 # If so, update the maximum temperature
                 max = sensor.current
+        if kTestMode:
+            self.fan_speed=0
         return max
 
     def __str__(self):
@@ -159,53 +162,83 @@ class CatLoad:
         # Start the virtual framebuffer first
         if ( not kTestMode):
             self.vfb_process = subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24', '-ac', '-nolisten', 'tcp'])
-            self.shell_process = subprocess.Popen(['glxgears', '-display', ':99'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(1) # Wait for Xvfb to start
+            self.glxgear = subprocess.Popen(['glxgears', '-display', ':99'])
+            self.cpuburn = subprocess.Popen(['./cpuburn'])
         else:
-            self.shell_process = subprocess.Popen(['glxgears'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.vfb_process = subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1024x768x24', '-ac', '-nolisten', 'tcp'])
+            self.glxgear = subprocess.Popen(['glxgears', '-display', ':0'])
+            self.cpuburn = subprocess.Popen(['sleep', '10000'])
 
         # Suspend load
-        self.shell_process.send_signal(signal.SIGTSTP)
+        self.glxgear.send_signal(signal.SIGSTOP)
+        self.cpuburn.send_signal(signal.SIGSTOP)
     
+    def __del__(self):
+        self.glxgear.kill()
+        self.vfb_process.kill()
+        self.cpuburn.kill()
+
     def do_load(self,ratio):
         # Ratio 0: only sleep
         # Ratio 1: only run
         slptime=self.window_size*(1-ratio)
         runtime=self.window_size*ratio
         for i in range(self.repeats):
-            self.shell_process.send_signal(signal.SIGCONT)
-            time.sleep(runtime)
-            self.shell_process.send_signal(signal.SIGTSTP)
-            time.sleep(slptime)
+            self.glxgear.send_signal(signal.SIGCONT)
+            self.cpuburn.send_signal(signal.SIGCONT)
+            time.sleep(runtime+0.01)
+            self.glxgear.send_signal(signal.SIGSTOP)
+            self.cpuburn.send_signal(signal.SIGSTOP)
+            time.sleep(slptime+0.01)
 
-def compute_ratio(target,maxval,ratio):
+def compute_ratio(target,maxval,ratio,fan_speed):
     if (maxval > 90):
         return max(0, ratio/2.)
     if (maxval < target):
-        return min(1, ratio*(1+abs(maxval/target)/10))
-    return max(0, ratio*(1-abs(target/maxval)/10))
+        if (fan_speed > 2800):
+            return max(0, ratio*.99)
+        return min(1, ratio*(1+(target-maxval)/(target*10)))
+    return max(0, ratio*(1-(maxval-target)/(target*10)))
+
 
 def main_loop():
+    def signal_handler(signum, frame):
+        print("Signal Number:", signum, " Frame: ", frame)
+        logger.info("Signal Number: %d Frame: %s", signum, frame)
+        cat_load.__del__()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     sensors_data = SensorsData(k_sensor_list)
     cat_load = CatLoad()
 
     # Suspend and unsuspend the shell process every second
-    ratio=0.5
-    cnt=0
+    ratio=0.6
+    target=76
+    #cnt=0
+    start_time = time.time()
     while True:
         sensors_data.parse_data(subprocess.check_output(['sensors']).decode('utf-8'))
         maxval = sensors_data.process_sensors()
         #print(sensors_data)
         #print(f"Maximum temperature: {maxval}°C")
-        ratio = compute_ratio(75,maxval,ratio)
+        ratio = compute_ratio(target,maxval,ratio,sensors_data.fan_speed)
         #print(f"Load ratio: {ratio}")
         logger.info(f"Tmax: {maxval}°C - Ratio: {ratio:.3f} - Fan: {sensors_data.fan_speed:.0f} RPM")
         cat_load.do_load(ratio)
-        cnt += 1
+        #cnt += 1
         # An equilibrium can be found at any fan speed (hiher ratio and higher fan speed)
         # To limit divergence, once in a while, we pause, thus slowing fan.
-        if cnt > 100:
-            time.sleep(100)
-            cnt = 0
+        #if cnt > 100:
+        #    time.sleep(100)
+        #    cnt = 0
+        # Calculate the elapsed time
+        elapsed_time = time.time() - start_time
+        # Check if the next iteration is more than an hour after the start
+        if elapsed_time >= 3600:
+            break
 
 def main():
     main_loop()
